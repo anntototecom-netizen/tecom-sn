@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>東訊序號產生器</title>
+  <style>
+    body{font-family:system-ui,-apple-system,"Microsoft JhengHei";max-width:980px;margin:24px auto;padding:0 12px;}
+    input,button{padding:8px 10px;font-size:14px;}
+    table{border-collapse:collapse;width:100%;margin-top:10px;}
+    th,td{border:1px solid #ddd;padding:8px;vertical-align:top;}
+    th{background:#f6f6f6;text-align:left;}
+    .row-actions button{margin-right:6px;}
+    .muted{color:#666;font-size:12px}
+    .bad{color:#b00020}
+    .ok{color:#0b7a0b}
+  </style>
+</head>
+<body>
+  <h2>東訊序號產生器（MVP）</h2>
+
+  <div>
+    <label>PI 號碼（檔名）：
+      <input id="piNo" placeholder="PI_T23N299A1220_东讯" style="width:320px">
+    </label>
+  </div>
+  <div style="margin-top:10px;">
+    <label>交期年份：
+      <input id="year" type="number" min="2020" max="2029" value="2026" style="width:120px">
+    </label>
+    <label style="margin-left:12px;">交期月份：
+      <input id="month" type="number" min="1" max="12" value="2" style="width:80px">
+    </label>
+    <span class="muted">（序號會用交期年月編碼，例如 2026/02 → 6B）</span>
+  </div>
+
+  <h3 style="margin-top:18px;">產品清單</h3>
+  <table id="itemsTable">
+    <thead>
+      <tr>
+        <th style="width:180px;">東訊料號 internal_pn</th>
+        <th>產品型號 product_name</th>
+        <th>供應商型號 supplier_name</th>
+        <th style="width:110px;">數量 qty</th>
+        <th style="width:140px;">操作</th>
+      </tr>
+    </thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+
+  <div class="row-actions" style="margin-top:10px;">
+    <button id="addRowBtn">＋ 新增產品</button>
+    <button id="genBtn">產生序號</button>
+    <span id="status" style="margin-left:10px;"></span>
+  </div>
+
+  <h3 style="margin-top:18px;">結果</h3>
+  <table id="resultTable">
+    <thead>
+      <tr>
+        <th>產品型號</th>
+        <th>東訊料號</th>
+        <th>供應商型號</th>
+        <th>數量</th>
+        <th>流水序號起</th>
+        <th>流水序號迄</th>
+      </tr>
+    </thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+
+<script>
+const GAS_WEBAPP_URL =https://script.google.com/macros/s/AKfycbyT1IXKRHBCIAqsaACjey8uLF8lYbguA0fBPhQfrNYi5lTuUnuixjVTh7nYoMcKBbeZ/exec
+
+function el(id){return document.getElementById(id);}
+function setStatus(msg, ok=true){
+  const s = el('status');
+  s.textContent = msg || '';
+  s.className = ok ? 'ok' : 'bad';
+}
+
+function newRow(){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="pn" placeholder="internal_pn" style="width:160px"></td>
+    <td><div class="pname muted">—</div></td>
+    <td><div class="sname muted">—</div></td>
+    <td><input class="qty" type="number" min="1" placeholder="數量" style="width:90px"></td>
+    <td>
+      <button class="remove">刪除</button>
+    </td>
+  `;
+
+  tr.querySelector('.remove').addEventListener('click', () => tr.remove());
+
+  const pnInput = tr.querySelector('.pn');
+  pnInput.addEventListener('change', async () => {
+    const pn = pnInput.value.trim();
+    if(!pn){ tr.querySelector('.pname').textContent='—'; tr.querySelector('.sname').textContent='—'; return; }
+
+    tr.querySelector('.pname').textContent = '查詢中…';
+    tr.querySelector('.sname').textContent = '查詢中…';
+
+    const url = `${GAS_WEBAPP_URL}?action=lookup&internal_pn=${encodeURIComponent(pn)}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if(!data.success){
+      tr.querySelector('.pname').textContent = '查無此料號';
+      tr.querySelector('.pname').className = 'pname bad';
+      tr.querySelector('.sname').textContent = '';
+      tr.dataset.valid = '0';
+      return;
+    }
+    tr.querySelector('.pname').textContent = data.product_name || '';
+    tr.querySelector('.pname').className = 'pname';
+    tr.querySelector('.sname').textContent = data.supplier_name || '';
+    tr.querySelector('.sname').className = 'sname';
+    tr.dataset.valid = '1';
+  });
+
+  return tr;
+}
+
+function getItems(){
+  const rows = [...el('itemsBody').querySelectorAll('tr')];
+  return rows.map(r => ({
+    internal_pn: r.querySelector('.pn').value.trim(),
+    qty: Number(r.querySelector('.qty').value),
+    _valid: r.dataset.valid === '1'
+  }));
+}
+
+async function generate(){
+  setStatus('處理中…', true);
+
+  const piNo = el('piNo').value.trim();
+  const year = Number(el('year').value);
+  const month = Number(el('month').value);
+
+  if(!piNo){ setStatus('PI 號碼必填', false); return; }
+  if(!year || !month){ setStatus('交期年/月必填', false); return; }
+
+  const items = getItems();
+  if(items.length === 0){ setStatus('請至少新增一個產品', false); return; }
+
+  for(const it of items){
+    if(!it.internal_pn){ setStatus('有產品料號未填', false); return; }
+    if(!it._valid){ setStatus(`料號查無資料：${it.internal_pn}`, false); return; }
+    if(!it.qty || it.qty<=0){ setStatus(`數量錯誤：${it.internal_pn}`, false); return; }
+  }
+
+  // form-encoded to avoid preflight
+  const form = new URLSearchParams();
+  form.set('action','generate');
+  form.set('pi_no', piNo);
+  form.set('delivery_year', String(year));
+  form.set('delivery_month', String(month));
+  form.set('items', JSON.stringify(items.map(({internal_pn, qty}) => ({internal_pn, qty}))));
+
+  const resp = await fetch(GAS_WEBAPP_URL, { method:'POST', body: form });
+  const data = await resp.json();
+
+  if(!data.success){
+    setStatus(data.message || '產生失敗', false);
+    return;
+  }
+
+  const tbody = el('resultBody');
+  tbody.innerHTML = '';
+  for(const r of data.items){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(r.product_name)}</td>
+      <td>${escapeHtml(r.internal_pn)}</td>
+      <td>${escapeHtml(r.supplier_name)}</td>
+      <td>${r.qty}</td>
+      <td>${escapeHtml(r.serial_start)}</td>
+      <td>${escapeHtml(r.serial_end)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  setStatus('完成 ✅（已寫入 SerialLog）', true);
+}
+
+function escapeHtml(s){
+  return String(s ?? '')
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#039;");
+}
+
+el('addRowBtn').addEventListener('click', () => el('itemsBody').appendChild(newRow()));
+el('genBtn').addEventListener('click', generate);
+
+// init first row
+el('itemsBody').appendChild(newRow());
+</script>
+</body>
+</html>
